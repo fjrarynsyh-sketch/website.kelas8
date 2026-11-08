@@ -1,0 +1,365 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ruang Kelas 8</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--primary:#3457d5;--bg:#f1f4fa}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:#202a40}
+button{background:var(--primary);color:white;border:0;padding:11px 15px;border-radius:9px;cursor:pointer;margin:3px}
+input,textarea,select{width:100%;padding:12px;margin:7px 0;border:1px solid #ddd;border-radius:9px}
+.card{background:white;padding:20px;border-radius:14px;margin-bottom:15px;box-shadow:0 3px 12px #0000000c}
+.login{max-width:420px;margin:70px auto;padding:20px}
+.layout{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
+aside{background:#172554;color:white;padding:18px}
+aside button{display:block;width:100%;text-align:left;background:transparent}
+aside button:hover{background:#344b8b}
+main{padding:25px;min-width:0}
+.hidden{display:none!important}
+.item{padding:12px 0;border-bottom:1px solid #eee;overflow-wrap:anywhere}
+.muted{color:#718096;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.stat{font-size:27px;font-weight:bold}
+@media(max-width:700px){
+.layout{display:block}aside{padding:10px}
+aside button{display:inline-block;width:auto}
+main{padding:13px}
+}
+</style>
+</head>
+<body>
+
+<div id="login" class="login card">
+<h1>🎓 Ruang Kelas 8</h1>
+<p>Silakan masuk ke akun kelas.</p>
+<input id="email" type="email" placeholder="Email akun kelas">
+<input id="password" type="password" placeholder="Password">
+<button style="width:100%" onclick="masuk()">Masuk</button>
+<p class="muted">Akun dibuat oleh admin melalui Supabase. Pendaftaran umum tidak tersedia.</p>
+<p id="loginError"></p>
+</div>
+
+<div id="app" class="layout hidden">
+<aside>
+<h2>Ruang Kelas 8</h2>
+<p id="userInfo"></p>
+<div id="menu"></div>
+<button onclick="keluar()">Keluar</button>
+</aside>
+<main>
+<h2 id="judul">Dashboard</h2>
+<div id="content"></div>
+</main>
+</div>
+
+<script>
+const SUPABASE_URL="MASUKKAN_PROJECT_URL";
+const SUPABASE_KEY="MASUKKAN_PUBLISHABLE_KEY";
+const db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+
+let me=null,role=null,page="home";
+let settings={features:{home:true,announcements:true,tasks:true,attendance:true,forum:true,chat:true},theme:"#3457d5"};
+
+const menus=[
+["home","Dashboard"],
+["announcements","Pengumuman"],
+["tasks","Tugas dan Materi"],
+["attendance","Absensi"],
+["forum","Forum Diskusi"],
+["chat","Chat Kelas"],
+["settings","Pengaturan Fitur"]
+];
+
+const $=id=>document.getElementById(id);
+const staff=()=>role==="admin"||role==="guru";
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const el=(tag,attrs={},text="")=>{
+ let x=document.createElement(tag);
+ Object.entries(attrs).forEach(([k,v])=>x.setAttribute(k,v));
+ if(text)x.textContent=text;
+ return x;
+};
+const saveMessage=(e)=>alert(e?.message||"Terjadi kesalahan");
+
+async function masuk(){
+ $("loginError").textContent="";
+ const {data,error}=await db.auth.signInWithPassword({
+  email:$("email").value,
+  password:$("password").value
+ });
+ if(error){$("loginError").textContent=error.message;return}
+ await mulai(data.user);
+}
+
+async function mulai(user){
+ me=user;
+ const {data:profile,error}=await db.from("profiles")
+ .select("full_name,role").eq("id",user.id).single();
+
+ if(error){alert("Profil belum tersedia. Hubungi admin.");await keluar();return}
+
+ role=profile.role;
+ $("userInfo").textContent=profile.full_name+" ("+role+")";
+ $("login").classList.add("hidden");
+ $("app").classList.remove("hidden");
+
+ const {data:s}=await db.from("site_settings").select("*").eq("id",1).single();
+ if(s){
+  settings=s;
+  document.documentElement.style.setProperty("--primary",s.theme||"#3457d5");
+ }
+ renderMenu();
+ await buka("home");
+}
+
+async function keluar(){
+ await db.auth.signOut();
+ me=null;role=null;
+ $("app").classList.add("hidden");
+ $("login").classList.remove("hidden");
+}
+
+function renderMenu(){
+ $("menu").innerHTML="";
+ menus.forEach(([id,name])=>{
+  if(id==="settings"&&role!=="admin")return;
+  if(id!=="settings"&&settings.features?.[id]===false)return;
+  let b=el("button",{},name);
+  b.onclick=()=>buka(id);
+  $("menu").append(b);
+ });
+}
+
+function box(title){
+ let d=el("section",{class:"card"});
+ d.append(el("h3",{},title));
+ $("content").append(d);
+ return d;
+}
+
+function formInput(parent,placeholder,type="text"){
+ let x=el("input",{type,placeholder});
+ parent.append(x);return x;
+}
+function formArea(parent,placeholder){
+ let x=el("textarea",{placeholder});parent.append(x);return x;
+}
+function button(parent,text,fn){
+ let b=el("button",{},text);b.onclick=fn;parent.append(b);return b;
+}
+function message(parent,text){
+ parent.append(el("div",{class:"item"},text));
+}
+
+async function buka(id){
+ page=id;
+ const menu=menus.find(x=>x[0]===id);
+ if(!menu)return;
+ if(id==="settings"&&role!=="admin")return;
+ if(id!=="settings"&&settings.features?.[id]===false)return;
+ $("judul").textContent=menu[1];
+ $("content").innerHTML="";
+ if(id==="home")await dashboard();
+ if(id==="announcements")await pengumuman();
+ if(id==="tasks")await tugas();
+ if(id==="attendance")await absensi();
+ if(id==="forum")await forum();
+ if(id==="chat")await chat();
+ if(id==="settings")pengaturan();
+}
+
+async function dashboard(){
+ let d=box("Selamat datang di kelas 8!");
+ d.append(el("p",{},"Portal kegiatan belajar, tugas, absensi, dan komunikasi kelas."));
+ let g=el("div",{class:"grid"});
+ for(const [table,label] of [
+  ["announcements","Pengumuman"],["tasks","Tugas"],
+  ["attendance","Absensi"],["forum","Diskusi"]
+ ]){
+  let {count}=await db.from(table).select("*",{count:"exact",head:true});
+  let a=el("div",{class:"card"});
+  a.append(el("div",{class:"muted"},label),el("div",{class:"stat"},count??0));
+  g.append(a);
+ }
+ d.append(g);
+}
+
+async function pengumuman(){
+ let d=box("Pengumuman Kelas");
+ if(staff()){
+  let title=formInput(d,"Judul pengumuman");
+  let body=formArea(d,"Isi pengumuman");
+  button(d,"Terbitkan",async()=>{
+   if(!title.value.trim()||!body.value.trim())return alert("Lengkapi formulir.");
+   let {error}=await db.from("announcements").insert({
+    title:title.value,body:body.value,created_by:me.id
+   });
+   if(error)return saveMessage(error);
+   buka(page);
+  });
+ }
+ let {data,error}=await db.from("announcements").select("*").order("created_at",{ascending:false});
+ if(error)return message(d,error.message);
+ data.forEach(a=>{
+  let q=el("div",{class:"item"});
+  q.append(el("b",{},a.title),el("p",{},a.body),
+  el("small",{class:"muted"},new Date(a.created_at).toLocaleString("id-ID")));
+  d.append(q);
+ });
+}
+
+async function tugas(){
+ let d=box("Tugas dan Materi");
+ if(staff()){
+  let title=formInput(d,"Nama tugas");
+  let deadline=formInput(d,"Batas pengumpulan");
+  let desc=formArea(d,"Petunjuk tugas");
+  let file=formInput(d,"","file");
+  button(d,"Terbitkan tugas",async()=>{
+   if(!title.value.trim())return alert("Nama tugas wajib diisi.");
+   let path=null;
+   if(file.files[0]){
+    let f=file.files[0];
+    if(f.size>5*1024*1024)return alert("Ukuran file maksimal 5 MB.");
+    path=me.id+"/"+Date.now()+"_"+f.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+    let upload=await db.storage.from("class-files").upload(path,f);
+    if(upload.error)return saveMessage(upload.error);
+   }
+   let {error}=await db.from("tasks").insert({
+    title:title.value,deadline:deadline.value,
+    description:desc.value,file_path:path,created_by:me.id
+   });
+   if(error)return saveMessage(error);
+   buka(page);
+  });
+ }
+ let {data,error}=await db.from("tasks").select("*").order("created_at",{ascending:false});
+ if(error)return message(d,error.message);
+ for(const t of data){
+  let q=el("div",{class:"item"});
+  q.append(el("b",{},t.title),
+  el("p",{},t.description||""),
+  el("small",{class:"muted"},"Batas: "+(t.deadline||"-")));
+  if(t.file_path){
+   let a=el("button",{},"Lihat / unduh file");
+   a.onclick=async()=>{
+    let {data,error}=await db.storage.from("class-files").createSignedUrl(t.file_path,60);
+    if(error)return saveMessage(error);
+    window.open(data.signedUrl,"_blank","noopener");
+   };
+   q.append(a);
+  }
+  d.append(q);
+ }
+}
+
+async function absensi(){
+ let d=box("Absensi Online");
+ if(role==="siswa"){
+  let b=button(d,"Catat kehadiran hari ini",async()=>{
+   let {error}=await db.from("attendance").insert({user_id:me.id,status:"Hadir"});
+   if(error)return alert(error.code==="23505"?"Kamu sudah mengisi absensi hari ini.":error.message);
+   buka(page);
+  });
+ }
+ let query=db.from("attendance")
+ .select("*,profiles(full_name)").order("attendance_date",{ascending:false}).limit(100);
+ if(role==="siswa")query=query.eq("user_id",me.id);
+ let {data,error}=await query;
+ if(error)return message(d,error.message);
+ data.forEach(a=>message(d,
+  (a.profiles?.full_name||"Siswa")+" · "+a.attendance_date+" · "+a.status));
+}
+
+async function forum(){
+ let d=box("Forum Diskusi");
+ let title=formInput(d,"Topik diskusi");
+ let body=formArea(d,"Tulis pertanyaan atau pendapat");
+ button(d,"Kirim diskusi",async()=>{
+  if(!title.value.trim()||!body.value.trim())return alert("Lengkapi topik dan pesan.");
+  let {error}=await db.from("forum").insert({
+   user_id:me.id,title:title.value,body:body.value
+  });
+  if(error)return saveMessage(error);
+  buka(page);
+ });
+ let {data,error}=await db.from("forum").select("*,profiles(full_name)").order("created_at",{ascending:false});
+ if(error)return message(d,error.message);
+ data.forEach(a=>{
+  let q=el("div",{class:"item"});
+  q.append(el("b",{},a.title),
+  el("p",{class:"muted"},"Oleh "+(a.profiles?.full_name||"Anggota")),
+  el("p",{},a.body));
+  d.append(q);
+ });
+}
+
+async function chat(){
+ let d=box("Chat Kelas");
+ let body=formArea(d,"Tulis pesan kelas...");
+ button(d,"Kirim pesan",async()=>{
+  if(!body.value.trim())return;
+  let {error}=await db.from("chat").insert({user_id:me.id,body:body.value});
+  if(error)return saveMessage(error);
+  buka(page);
+ });
+ button(d,"Muat ulang pesan",()=>buka(page));
+ let {data,error}=await db.from("chat")
+ .select("*,profiles(full_name)").order("created_at",{ascending:true}).limit(100);
+ if(error)return message(d,error.message);
+ data.forEach(a=>{
+  let q=el("div",{class:"item"});
+  q.append(el("b",{},a.profiles?.full_name||"Anggota"),
+  el("p",{},a.body),
+  el("small",{class:"muted"},new Date(a.created_at).toLocaleString("id-ID")));
+  d.append(q);
+ });
+}
+
+function pengaturan(){
+ let d=box("Pengaturan Fitur");
+ d.append(el("p",{class:"muted"},"Admin dapat mengaktifkan atau menonaktifkan menu kelas."));
+ menus.filter(x=>x[0]!=="settings").forEach(([id,name])=>{
+  let row=el("label",{style:"display:flex;justify-content:space-between;padding:12px;border-bottom:1px solid #eee"});
+  row.append(el("span",{},name));
+  let cb=el("input",{type:"checkbox"});
+  cb.style.width="auto";
+  cb.checked=settings.features[id]!==false;
+  cb.onchange=async()=>{
+   settings.features[id]=cb.checked;
+   let {error}=await db.from("site_settings").update({
+    features:settings.features
+   }).eq("id",1);
+   if(error)return saveMessage(error);
+   renderMenu();
+  };
+  row.append(cb);d.append(row);
+ });
+ let color=formInput(d,"Warna utama");
+ color.value=settings.theme||"#3457d5";
+ button(d,"Simpan warna",async()=>{
+  if(!/^#[0-9a-f]{6}$/i.test(color.value))return alert("Gunakan format #3457d5");
+  let {error}=await db.from("site_settings").update({theme:color.value}).eq("id",1);
+  if(error)return saveMessage(error);
+  settings.theme=color.value;
+  document.documentElement.style.setProperty("--primary",color.value);
+  alert("Warna berhasil diubah.");
+ });
+}
+
+db.auth.getSession().then(({data})=>{
+ if(data.session)mulai(data.session.user);
+});
+db.auth.onAuthStateChange((event,session)=>{
+ if(event==="SIGNED_OUT"){
+  $("app").classList.add("hidden");
+  $("login").classList.remove("hidden");
+ }
+});
+</script>
+</body>
+</html>
